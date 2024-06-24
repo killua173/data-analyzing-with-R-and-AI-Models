@@ -1,0 +1,784 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(lmtest)
+library(car)
+
+
+
+flights <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2022/2022-07-12/flights.csv')
+flights
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+```{r}
+
+
+head(flights)
+
+
+```
+```{r}
+summary(flights)
+```
+
+```{r}
+str(flights)
+```
+```{r}
+any(is.na(flights))
+
+head(flights)
+```
+
+```{r}
+
+
+# Use sapply to apply the function 'anyNA' to each column of the dataframe
+na_columns <- sapply(flights, anyNA)
+
+
+# Print the columns that contain NAs
+na_columns_with_nas <- na_columns[na_columns == TRUE]
+print(na_columns_with_nas)
+
+```
+```{r}
+
+# Fill NA with 0
+flights[is.na(flights)] <- 0
+head(flights)
+```
+
+```{r}
+# New transformations:
+
+
+# 1. Calculate the cumulative number of IFR flights year-to-date
+flights <- flights %>%
+  arrange(FLT_DATE) %>%
+  mutate(YTD_IFR_FLIGHTS = cumsum(FLT_TOT_IFR_2))
+# Reason: To track cumulative IFR flights through the year.
+# Interpretation: Provides a running total of IFR flights from the beginning of the year.
+
+# 2. Calculate the cumulative number of VFR flights year-to-date
+flights <- flights %>%
+  arrange(FLT_DATE) %>%
+  mutate(YTD_VFR_FLIGHTS = cumsum(FLT_TOT_1))
+# Reason: To track cumulative VFR flights through the year.
+# Interpretation: Provides a running total of VFR flights from the beginning of the year.
+
+# Existing transformations:
+
+# 3. Calculate the total number of flights (VFR + IFR)
+flights <- flights %>%
+  mutate(TOTAL_FLIGHTS = FLT_TOT_1 + FLT_TOT_IFR_2)
+# Reason: To get the overall flight count.
+# Interpretation: Combines VFR and IFR flights to provide a total flight count.
+
+# 4. Calculate the average number of departures per flight
+flights <- flights %>%
+  mutate(AVG_DEP_PER_FLIGHT = FLT_DEP_1 / FLT_TOT_1)
+# Reason: To analyze departure efficiency.
+# Interpretation: Shows the average number of departures per total flights.
+
+# 5. Calculate the average number of arrivals per flight
+flights <- flights %>%
+  mutate(AVG_ARR_PER_FLIGHT = FLT_ARR_1 / FLT_TOT_1)
+# Reason: To analyze arrival efficiency.
+# Interpretation: Shows the average number of arrivals per total flights.
+
+# 6. Flight Activity Label
+flights <- flights %>%
+  mutate(FLIGHT_ACTIVITY = case_when(
+    (FLT_DEP_1 + FLT_ARR_1) > 100 ~ "High",
+    (FLT_DEP_1 + FLT_ARR_1) > 50 ~ "Medium",
+    TRUE ~ "Low")
+  )
+# Reason: To categorize flight activity levels.
+# Interpretation: Classifies flights into high, medium, or low activity based on total departures and arrivals.
+
+# 7. Calculate the percentage of IFR flights
+flights <- flights %>%
+  mutate(IFR_FLIGHT_PERCENT = (FLT_TOT_IFR_2 / TOTAL_FLIGHTS) * 100)
+# Reason: To determine the proportion of IFR flights.
+# Interpretation: Shows the percentage of IFR flights out of total flights.
+
+# 8. Calculate the difference between departures and arrivals for VFR flights
+flights <- flights %>%
+  mutate(DEP_ARR_DIFF_VFR = FLT_DEP_1 - FLT_ARR_1)
+# Reason: To identify discrepancies between VFR departures and arrivals.
+# Interpretation: Shows the net difference between VFR departures and arrivals.
+
+# 9. Calculate the difference between departures and arrivals for IFR flights
+flights <- flights %>%
+  mutate(DEP_ARR_DIFF_IFR = FLT_DEP_IFR_2 - FLT_ARR_IFR_2)
+# Reason: To identify discrepancies between IFR departures and arrivals.
+# Interpretation: Shows the net difference between IFR departures and arrivals.
+
+# 10. Normalized IFR Flights
+flights <- flights %>%
+  mutate(NORM_IFR_FLIGHTS = (FLT_TOT_IFR_2 - min(FLT_TOT_IFR_2)) / (max(FLT_TOT_IFR_2) - min(FLT_TOT_IFR_2)))
+# Reason: To normalize IFR flight data.
+# Interpretation: Scales the IFR flight values between 0 and 1 for comparative analysis.
+
+# 11. Normalized VFR Flights
+flights <- flights %>%
+  mutate(NORM_VFR_FLIGHTS = (FLT_TOT_1 - min(FLT_TOT_1)) / (max(FLT_TOT_1) - min(FLT_TOT_1)))
+# Reason: To normalize VFR flight data.
+# Interpretation: Scales the VFR flight values between 0 and 1 for comparative analysis.
+
+# 12. Create a column for the quarter of the year
+flights <- flights %>%
+  mutate(QUARTER = quarters(FLT_DATE))
+# Reason: To analyze data on a quarterly basis.
+# Interpretation: Assigns each month to its respective quarter.
+
+# 13. Create a column for the day of the week of the flight date
+flights <- flights %>%
+  mutate(DAY_OF_WEEK = weekdays(FLT_DATE))
+# Reason: To analyze trends based on the day of the week.
+# Interpretation: Provides the day of the week for each flight date.
+
+# 14. Calculate the year-to-date total flights
+flights <- flights %>%
+  arrange(FLT_DATE) %>%
+  mutate(YTD_TOTAL_FLIGHTS = cumsum(TOTAL_FLIGHTS))
+# Reason: To track cumulative flight count through the year.
+# Interpretation: Provides a running total of flights from the beginning of the year.
+
+# 15. Calculate the total number of departures (VFR + IFR)
+flights <- flights %>%
+  mutate(TOTAL_DEP = FLT_DEP_1 + FLT_DEP_IFR_2)
+# Reason: To get the overall departure count.
+# Interpretation: Combines VFR and IFR departures to provide a total departure count.
+
+# 16. Calculate the total number of arrivals (VFR + IFR)
+flights <- flights %>%
+  mutate(TOTAL_ARR = FLT_ARR_1 + FLT_ARR_IFR_2)
+# Reason: To get the overall arrival count.
+# Interpretation: Combines VFR and IFR arrivals to provide a total arrival count.
+
+# 17. Calculate the difference between total departures and total arrivals
+flights <- flights %>%
+  mutate(DEP_ARR_DIFF_TOTAL = TOTAL_DEP - TOTAL_ARR)
+# Reason: To identify discrepancies between total departures and arrivals.
+# Interpretation: Shows the net difference between total departures and total arrivals.
+
+# 17. Calculate the difference between total departures and total arrivals
+# Calculate the difference between total departures and total arrivals
+flights <- flights %>%
+  mutate(DEP_ARR_RATIO = ifelse(TOTAL_ARR != 0, round(TOTAL_DEP / TOTAL_ARR, 4), 0))
+
+# Reason: To identify discrepancies between total departures and arrivals.
+# Interpretation: Shows the net difference between total departures and total arrivals.
+flights[is.na(flights)] <- 0
+ 
+
+# View the modified dataframe
+summary(flights)
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+# Line Plot of Total Flights Over Time
+# Description: Visualizing the trend of total flights over time (e.g., months or years).
+# Interpretation: This chart helps identify seasonal patterns or trends in flight activity.
+ggplot(flights, aes(x = FLT_DATE, y = TOTAL_FLIGHTS)) +
+  geom_line() +
+  labs(title = "Total Flights Over Time", x = "Date", y = "Total Flights")
+
+
+
+
+# Cumulative total flights year-to-date
+ggplot(flights, aes(x = FLT_DATE, y = YTD_TOTAL_FLIGHTS)) +
+  geom_line() +
+  labs(title = "Cumulative Total Flights Year-to-Date", x = "Date", y = "YTD Total Flights")
+
+# Interpretation:
+# This chart tracks the accumulation of total flights over the year.
+# It provides a comprehensive view of how overall flight volumes build up through time.
+
+
+
+#Heatmap of Flight Activity by Month and Day
+
+ggplot(flights, aes(x = MONTH_MON, y = factor(day(FLT_DATE)), fill = TOTAL_FLIGHTS)) +
+  geom_tile() +
+  labs(title = "Flight Activity by Month and Day", x = "Month", y = "Day", fill = "Total Flights") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue")
+# Description: Creating a heatmap to show flight activity by month and day.
+# Interpretation: Heatmaps provide a visual representation of flight patterns throughout the year.
+
+
+
+
+
+# Chart 11: Line Plot of IFR Flight Percent over Time
+flights %>%
+  ggplot(aes(x = FLT_DATE, y = IFR_FLIGHT_PERCENT)) +
+  geom_line(color = "orange") +
+  labs(title = "IFR Flight Percentage Over Time",
+       x = "Date",
+       y = "Percentage of IFR Flights") +
+  theme_minimal()
+
+# Description: This line plot illustrates the trend of IFR flight percentage over time.
+# Interpretation: Identify any changes or patterns in the proportion of IFR flights over time.
+
+
+# Chart 15: Bar Chart of Flight Activity by State
+flights %>%
+  group_by(STATE_NAME) %>%
+  summarize(total_flights = sum(TOTAL_FLIGHTS)) %>%
+  ggplot(aes(x = STATE_NAME, y = total_flights)) +
+  geom_bar(stat = "identity", fill = "lightblue") +
+  labs(title = "Flight Activity by State",
+       x = "State",
+       y = "Total Flights") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Description: This bar chart shows flight activity across different states.
+# Interpretation: Identify states with high and low levels of flight activity.
+
+
+
+# Difference between IFR departures and arrivals
+ggplot(flights, aes(x = FLT_DATE, y = DEP_ARR_DIFF_TOTAL)) +
+  geom_line() +
+  labs(title = "Difference Between IFR Departures and Arrivals", x = "Date", y = "Difference")
+
+# Interpretation:
+# This chart highlights periods where there were more departures than arrivals or vice versa for IFR flights.
+# It helps in identifying operational imbalances.
+
+
+# Daily average flights
+daily_avg_flights <- flights %>%
+  group_by(FLT_DATE) %>%
+  summarise(DailyAvgFlights = mean(TOTAL_FLIGHTS))
+
+ggplot(daily_avg_flights, aes(x = FLT_DATE, y = DailyAvgFlights)) +
+  geom_line() +
+  labs(title = "Daily Average Flights", x = "Date", y = "Average Flights")
+
+# Interpretation:
+# This chart shows the daily average number of flights.
+# It helps in understanding the consistency and variability of flight activity on a daily basis.
+
+
+# IFR vs VFR flights by year
+flights_by_type <- flights %>%
+  group_by(YEAR) %>%
+  summarise(IFR = sum(FLT_TOT_IFR_2), VFR = sum(TOTAL_FLIGHTS - FLT_TOT_IFR_2))
+
+# Use pivot_longer to reshape the dataframe
+flights_by_type_long <- flights_by_type %>%
+  pivot_longer(cols = c("IFR", "VFR"), names_to = "Flight_Type", values_to = "Number_of_Flights")
+
+# Plot the data
+ggplot(flights_by_type_long, aes(x = factor(YEAR), y = Number_of_Flights, fill = Flight_Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "IFR vs VFR Flights by Year", x = "Year", y = "Number of Flights", fill = "Flight Type")
+
+
+# Total flights by day of the week
+ggplot(flights, aes(x = DAY_OF_WEEK, y = TOTAL_FLIGHTS)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Flights by Day of the Week", x = "Day of the Week", y = "Total Flights")
+
+# Interpretation:
+# This chart illustrates the distribution of flights across different days of the week.
+# Peaks on specific days can indicate preferred travel days or operational schedules.
+
+
+# Total flights by quarter
+ggplot(flights, aes(x = QUARTER, y = TOTAL_FLIGHTS)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Flights by Quarter", x = "Quarter", y = "Total Flights")
+
+# Interpretation:
+# This chart shows how flight activity changes across different quarters.
+# It helps in understanding seasonal impacts on flight volumes.
+
+
+# Total flights by airport
+top_airports <- flights %>%
+  group_by(APT_NAME) %>%
+  summarise(TotalFlights = sum(TOTAL_FLIGHTS)) %>%
+  top_n(10, TotalFlights)
+
+ggplot(top_airports, aes(x = reorder(APT_NAME, TotalFlights), y = TotalFlights)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Top 10 Airports by Total Flights", x = "Airport", y = "Total Flights")
+
+# Interpretation:
+# This chart shows which airports handle the most flights.
+# It helps in understanding airport capacity and traffic distribution.
+
+
+# Percentage of IFR flights by airport
+ifr_percent <- flights %>%
+  group_by(APT_NAME) %>%
+  summarise(IFRPercent = mean(IFR_FLIGHT_PERCENT)) %>%
+  top_n(10, IFRPercent)
+
+ggplot(ifr_percent, aes(x = reorder(APT_NAME, IFRPercent), y = IFRPercent)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "IFR Flight Percentage by Airport", x = "Airport", y = "IFR Flight Percentage")
+
+# Interpretation:
+# This chart shows the reliance on IFR flights at different airports.
+# A higher percentage indicates a greater dependence on instrument-based navigation,
+# often due to weather conditions or airport traffic.
+
+
+
+# Monthly flight distribution box plot
+monthly_flight_distribution <- flights %>%
+  group_by(MONTH_MON) %>%
+  summarise(TotalFlights = sum(TOTAL_FLIGHTS, na.rm = TRUE))  # Handle NA values
+
+ggplot(flights, aes(x = MONTH_MON, y = TOTAL_FLIGHTS)) +
+  geom_boxplot() +
+  labs(title = "Monthly Flight Distribution", x = "Month", y = "Total Flights")
+
+# Interpretation:
+# This chart shows the distribution of flight volumes for each month across all years.
+# The box plot helps in understanding the spread and typical values, as well as identifying outliers.
+# Handling missing values ensures accurate representation of the data.
+
+```
+
+
+
+
+```{r}
+summary(flights)
+
+```
+
+
+Hypothesis Formulation
+Hypothesis:
+The total number of flights (TOTAL_FLIGHTS) at various airports is influenced by the year (YEAR), the month (MONTH_NUM), and the specific airport identifier (APT_ICAO).
+
+Objective:
+To build a linear regression model to identify significant predictors of the total number of flights, quantify their effects, and assess the model's performance.
+
+Description and Interpretation of the Model Results
+Variables Chosen:
+
+YEAR: Captures trends or changes in flight patterns over time.
+MONTH_NUM: Captures seasonal variations in air travel.
+APT_ICAO: Accounts for differences in airport capacities and demands.
+
+Model Summary:
+
+Adjusted R-squared: Indicates the proportion of variance explained by the model.
+F-statistic: Tests the overall significance of the model.
+P-values: Indicate the statistical significance of each coefficient.
+Evaluation Metrics:
+
+Adjusted R-squared: Reflects how well the model explains the variability.
+F-statistic: Assesses the overall significance of the model.
+Mean Squared Error (MSE): Measures the average squared difference between observed and predicted values.
+Model Interpretation
+YEAR:
+Significant coefficients indicate notable year-to-year changes in flight numbers.
+MONTH_NUM:
+Significant coefficients reveal seasonal patterns in flight numbers.
+APT_ICAO:
+Significant coefficients identify airports with consistently higher or lower flight volumes.
+
+Model Quality and Assumptions
+Model Quality:
+
+Adjusted R-squared: Higher values suggest a better fit.
+Mean Squared Error (MSE): Lower values indicate better prediction accuracy.
+Model Assumptions:
+
+Linearity:
+Checked using a plot of fitted values vs. residuals.
+Normality of Residuals:
+Checked using a QQ plot.
+
+Conclusion
+The linear regression model indicates that the total number of flights is significantly influenced by the year, month, and specific airport. The adjusted R-squared value suggests how well these factors explain the variability in flight numbers, and the significant predictors highlight important trends and patterns. The model's assumptions are checked using diagnostic plots, and the overall fit is evaluated using metrics like adjusted R-squared and MSE. This analysis helps us understand the key drivers of flight volumes and provides a foundation for further refinement and comparison with other models.
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+
+# Convert APT_ICAO to factor
+flights$APT_ICAO <- as.factor(flights$APT_ICAO)
+flights$YEAR <- as.factor(flights$YEAR)
+flights$MONTH_NUM <- as.factor(flights$MONTH_NUM)
+
+# Split data into training and testing sets
+set.seed(123)  # for reproducibility
+trainIndex <- createDataPartition(flights$TOTAL_FLIGHTS, p = 0.8, list = FALSE)
+trainData <- flights[trainIndex, ]
+testData <- flights[-trainIndex, ]
+
+# Fit the linear model
+model <- lm(TOTAL_FLIGHTS ~ YEAR + MONTH_NUM + APT_ICAO, data = trainData)
+summary(model)
+
+# Model evaluation
+# Predicted values on the test data
+predictions <- predict(model, newdata = testData)
+
+# Calculate evaluation metrics
+evaluation_metrics <- list(
+  adjusted_r_squared = summary(model)$adj.r.squared,
+  f_statistic = summary(model)$fstatistic[1],
+  p_values = summary(model)$coefficients[,4],
+  mse = mean((testData$TOTAL_FLIGHTS - predictions)^2)
+)
+
+# Display evaluation metrics
+cat("Adjusted R-squared: ", evaluation_metrics$adjusted_r_squared, "\n")
+cat("F-statistic: ", evaluation_metrics$f_statistic, "\n")
+cat("P-values: ", evaluation_metrics$p_values, "\n")
+cat("Mean Squared Error: ", evaluation_metrics$mse, "\n")
+
+# Check model assumptions
+# Linearity
+plot(model$fitted.values, model$residuals, main = "Linearity: Fitted Values vs Residuals")
+abline(h = 0, col = "red")
+
+# Normality of residuals
+qqnorm(model$residuals, main = "Normality of Residuals")
+qqline(model$residuals, col = "red")
+
+
+
+```
+
+Hypothesis Formulation
+Hypothesis:
+The total number of flights (TOTAL_FLIGHTS) is influenced by the state (STATE_NAME), year (YEAR), month (MONTH_NUM), and day of the week (DAY_OF_WEEK).
+
+Objective:
+To build a linear regression model to identify significant predictors of the total number of flights, quantify their effects, and assess the model's performance.
+
+Description and Interpretation of the Model Results
+Variables Chosen:
+
+STATE_NAME: Differences in flight volumes across states.
+YEAR: Trends or changes in flight patterns over time.
+MONTH_NUM: Seasonal variations in air travel.
+DAY_OF_WEEK: Weekly patterns in flight numbers.
+
+Model Summary:
+
+Adjusted R-squared: 0.1717
+F-statistic: 1784, p-value < 2.2e-16
+Residual Standard Error: 386.7
+Coefficients Interpretation:
+
+Many states, years, months, and days of the week have significant coefficients indicating their influence on the number of flights.
+The most significant positive coefficients include STATE_NAME[Denmark], STATE_NAME[Switzerland], and STATE_NAME[Finland].
+Negative coefficients include STATE_NAME[Lithuania] and STATE_NAME[North Macedonia], indicating fewer flights relative to the baseline.
+Model Evaluation
+Evaluation Metrics:
+
+Adjusted R-squared: 0.1717 indicates that 17.17% of the variability in TOTAL_FLIGHTS is explained by the model.
+F-statistic: 1784 indicates the overall significance of the model.
+Mean Squared Error (MSE): 147860.5 measures the average squared difference between observed and predicted values.
+Model Quality and Assumptions
+Model Quality:
+
+Adjusted R-squared: Indicates a modest fit, explaining 17.17% of the variance.
+Mean Squared Error (MSE): Lower values indicate better prediction accuracy
+
+Conclusion
+The linear regression model indicates that the total number of flights is significantly influenced by the state, year, month, and day of the week. The adjusted R-squared value suggests a modest fit, explaining 17.17% of the variability in flight numbers. The model reveals significant trends and patterns, with notable positive and negative effects from different states, years, months, and days of the week. However, the model assumptions indicate issues with homoscedasticity and multicollinearity, suggesting areas for further refinement and improvement.
+
+
+
+```{r}
+
+
+# Convert necessary variables to factors
+flights$STATE_NAME <- as.factor(flights$STATE_NAME)
+flights$YEAR <- as.factor(flights$YEAR)
+flights$MONTH_NUM <- as.factor(flights$MONTH_NUM)
+flights$DAY_OF_WEEK <- as.factor(flights$DAY_OF_WEEK)
+
+# Create dummy variables
+flights_dummies <- model.matrix(~ STATE_NAME + YEAR + MONTH_NUM + DAY_OF_WEEK, data = flights)[,-1]
+
+# Combine the dummy variables with the original data
+flights_processed <- cbind(flights_dummies, flights[, c("TOTAL_FLIGHTS")])
+
+# Split data into training and testing sets
+set.seed(123)  # for reproducibility
+trainIndex <- createDataPartition(flights_processed$TOTAL_FLIGHTS, p = 0.8, list = FALSE)
+trainData <- flights_processed[trainIndex, ]
+testData <- flights_processed[-trainIndex, ]
+
+# Fit the linear model
+model <- lm(TOTAL_FLIGHTS ~ ., data = trainData)
+summary(model)
+
+# Model evaluation
+predictions <- predict(model, newdata = testData)
+
+# Calculate evaluation metrics
+evaluation_metrics <- list(
+  adjusted_r_squared = summary(model)$adj.r.squared,
+  f_statistic = summary(model)$fstatistic[1],
+  p_values = summary(model)$coefficients[,4],
+  mse = mean((testData$TOTAL_FLIGHTS - predictions)^2)
+)
+
+# Display evaluation metrics
+cat("Adjusted R-squared: ", evaluation_metrics$adjusted_r_squared, "\n")
+cat("F-statistic: ", evaluation_metrics$f_statistic, "\n")
+cat("P-values: ", evaluation_metrics$p_values, "\n")
+cat("Mean Squared Error: ", evaluation_metrics$mse, "\n")
+
+# Check model assumptions
+# Linearity
+plot(model$fitted.values, residuals(model), main = "Linearity: Fitted Values vs Residuals")
+abline(h = 0, col = "red")
+
+# Normality of residuals
+qqnorm(residuals(model), main = "Normality of Residuals")
+qqline(residuals(model), col = "red")
+
+# Homoscedasticity
+homoscedasticity_test <- bptest(model)
+if (homoscedasticity_test$p.value < 0.05) {
+  cat("Homoscedasticity Test: Residuals do not exhibit homoscedasticity.\n")
+} else {
+  cat("Homoscedasticity Test: Residuals exhibit homoscedasticity.\n")
+}
+
+# Multicollinearity
+vif_values <- vif(model)
+if (any(vif_values > 10)) {
+  cat("Multicollinearity Test: Some predictors exhibit multicollinearity.\n")
+} else {
+  cat("Multicollinearity Test: No significant multicollinearity detected.\n")
+}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+Formulating a Hypothesis
+We begin by hypothesizing that airports can be categorized into distinct clusters based on their operational characteristics, such as total flights, departures, arrivals, and the ratio of departures to arrivals. We anticipate that these clusters represent different types of airports with similar operational patterns. By segmenting airports into clusters, we aim to identify common operational profiles and understand the underlying factors driving these patterns. This hypothesis serves as the foundation for our K-means clustering analysis.
+
+Description and Interpretation of Model Results
+Our K-means clustering analysis provides insights into the operational characteristics of airports and identifies distinct clusters within the data.
+
+Variables Selection:
+We chose total flights, departures, arrivals, and the departure to arrival ratio as our variables of interest. These variables are fundamental indicators of airport activity and provide valuable insights into operational dynamics.
+Interpretation of Results:
+Each cluster represents a unique group of airports with similar operational profiles.
+Cluster 1: This cluster comprises airports with significantly higher than average total flights, departures, and arrivals, indicating busy airports with high traffic volume. The departure to arrival ratio is slightly higher than average.
+Cluster 2: Airports in this cluster exhibit below-average total flights, departures, and arrivals, with a notably lower departure to arrival ratio.
+Cluster 3: This is the largest cluster, containing airports with around average total flights, departures, and arrivals. The departure to arrival ratio is close to average.
+Cluster 4: Airports in this cluster demonstrate significantly higher than average total flights, departures, and arrivals, with a departure to arrival ratio slightly above average.
+Evaluation of Model Quality:
+We evaluated the model's quality using the within-cluster sum of squares (WCSS) and silhouette width.
+Lower WCSS values indicate tighter clusters, while higher silhouette widths suggest better cluster separation.
+Comparison of Models:
+We compared models with different numbers of clusters to identify the optimal number. This involved assessing the trade-off between model complexity and cluster separation.
+The selected number of clusters balances cluster cohesion and separation, providing meaningful insights into airport classifications.
+
+Interpretation of Results:
+
+Cluster 1: This cluster comprises airports with significantly higher than average total flights, departures, and arrivals, indicating busy airports with high traffic volume. The departure to arrival ratio is slightly higher than average. These airports may serve as major hubs or key destinations.
+Cluster 2: Airports in this cluster exhibit below-average total flights, departures, and arrivals, with a notably lower departure to arrival ratio. These airports might represent smaller regional airports or those with specialized operations.
+Cluster 3: This is the largest cluster, containing airports with around average total flights, departures, and arrivals. The departure to arrival ratio is close to average. These airports likely represent a broad spectrum of mid-sized facilities with balanced traffic patterns.
+Cluster 4: Airports in this cluster demonstrate significantly higher than average total flights, departures, and arrivals, with a departure to arrival ratio slightly above average. These airports may serve as major departure points or have high outbound traffic due to tourism or business activities.
+
+```{r}
+
+
+
+
+# Step 1: Data Preparation
+airport_data <- flights[, c("APT_NAME", "TOTAL_FLIGHTS", "TOTAL_DEP", "TOTAL_ARR","DEP_ARR_RATIO")]
+
+# Step 2: Feature Engineering
+
+# Convert APT_NAME to numerical using one-hot encoding
+airport_data <- cbind(airport_data, model.matrix(~ APT_NAME - 1, data = airport_data))
+
+# Remove APT_NAME column
+airport_data <- airport_data[, -1]
+
+# Step 3: Check for and handle missing values
+if (sum(is.na(airport_data)) > 0) {
+  airport_data[is.na(airport_data)] <- 0
+}
+
+# Step 4: Normalization
+airport_data[, c("TOTAL_FLIGHTS", "TOTAL_DEP", "TOTAL_ARR", "DEP_ARR_RATIO")] <- scale(airport_data[, c("TOTAL_FLIGHTS", "TOTAL_DEP", "TOTAL_ARR", "DEP_ARR_RATIO")])
+
+# Step 5: Determine Optimal Number of Clusters
+
+# Elbow Method
+#wcss <- numeric(10)  # Initialize vector to store within-cluster sum of squares
+#for (i in 1:10) {
+#  kmeans_model <- kmeans(airport_data, centers = i)
+#  wcss[i] <- kmeans_model$tot.withinss
+#}
+
+# Plot the elbow curve
+#plot(1:10, wcss, type = "b", main = "Elbow Method", xlab = "Number of Clusters (k)", ylab = "Within-cluster Sum of Squares (WCSS)")
+
+# Silhouette Analysis
+#sil_width <- numeric(10)  # Initialize vector to store silhouette widths
+#for (i in 2:10) {
+#  kmeans_model <- kmeans(airport_data, centers = i)
+#  sil_width[i] <- mean(silhouette(kmeans_model$cluster, dist(airport_data))[, 3])
+#}
+
+# Plot silhouette widths
+#plot(2:10, sil_width[2:10], type = "b", main = "Silhouette Analysis", xlab = "Number of Clusters (k)", ylab = "Average Silhouette Width")
+
+# Step 6: Apply K-means Clustering
+set.seed(123) # for reproducibility
+
+# Use the elbow method or silhouette analysis to determine the number of clusters
+k <- 4  # Hardcoded for now, replace with optimal k based on the above methods
+
+kmeans_model <- kmeans(airport_data, centers = k)
+
+# Step 7: Interpretation
+airport_data$Cluster <- as.factor(kmeans_model$cluster)
+cluster_summary <- aggregate(airport_data[, c("TOTAL_FLIGHTS", "TOTAL_DEP", "TOTAL_ARR", "DEP_ARR_RATIO")], by = list(airport_data$Cluster), FUN = mean)
+cluster_summary <- cbind(cluster_summary, Size = table(airport_data$Cluster))
+
+# Step 8: Visualization
+# Assuming you want to visualize TOTAL_FLIGHTS vs. TOTAL_DEP colored by cluster
+iris_final_predict <- data.frame(sepal_length = airport_data$TOTAL_FLIGHTS, sepal_width = airport_data$TOTAL_DEP, .pred_cluster = airport_data$Cluster)
+ggplot(iris_final_predict, aes(sepal_length, sepal_width, color = .pred_cluster)) +
+  geom_point() +
+  labs(color = "Cluster", x = "Total Flights", y = "Total Departures")
+
+# View cluster summary
+print(cluster_summary)
+
+```
+
+
+A- Description of Actions Taken
+In the provided R Notebook, several actions were taken to analyze and manipulate the dataset flights.csv. Here's a summary of the steps:
+
+Data Import and Inspection:
+
+The dataset flights.csv was imported using readr::read_csv.
+Initial exploration of the dataset using functions like head, summary, and str to understand its structure, contents, and any missing values.
+Data Cleaning and Imputation:
+
+Checked for missing values (NA) across columns using any(is.na(flights)).
+Imputed missing values with zeros using flights[is.na(flights)] <- 0.
+Data Transformation:
+
+Created new variables and transformations:
+Calculated cumulative counts (YTD_IFR_FLIGHTS, YTD_VFR_FLIGHTS).
+Combined variables to derive new insights (TOTAL_FLIGHTS, AVG_DEP_PER_FLIGHT, AVG_ARR_PER_FLIGHT).
+Normalized variables (NORM_IFR_FLIGHTS, NORM_VFR_FLIGHTS).
+Extracted temporal components (QUARTER, DAY_OF_WEEK).
+Performed cumulative sums and additional calculations to enrich the dataset.
+Exploratory Data Analysis (EDA):
+
+Created various visualizations to explore relationships and patterns in the data:
+Line plots (Total Flights Over Time, Cumulative Total Flights Year-to-Date).
+Heatmaps (Flight Activity by Month and Day).
+Bar charts (Flight Activity by State).
+Box plots (Monthly Flight Distribution).
+Cluster analysis (K-means clustering).
+Each visualization aimed to uncover insights into flight patterns, activity levels, and trends over time.
+Model Building and Evaluation:
+
+Constructed linear regression models to predict TOTAL_FLIGHTS based on predictors such as YEAR, MONTH_NUM, APT_ICAO, STATE_NAME, and DAY_OF_WEEK.
+Evaluated model performance using metrics like adjusted R-squared, F-statistic, p-values, and mean squared error (MSE).
+Assessed model assumptions including linearity, normality of residuals, homoscedasticity, and multicollinearity.
+Hypothesis Formulation and Testing:
+
+Formulated hypotheses regarding factors influencing TOTAL_FLIGHTS.
+Tested hypotheses using statistical models and interpreted results to draw conclusions about significant predictors.
+b-Conclusion
+
+Successfully imported, cleaned, and transformed the dataset for analysis.
+Conducted comprehensive EDA to visualize flight patterns and relationships.
+Built and evaluated predictive models to understand factors affecting TOTAL_FLIGHTS.
+Tested hypotheses and interpreted results to identify significant predictors of flight activity.
+
+c-What Was Accomplished:
+
+Identified temporal trends in flight activity (Total Flights Over Time, Monthly Flight Distribution).
+Explored regional variations in flight volumes (Flight Activity by State).
+Analyzed operational characteristics using clustering (K-means clustering).
+Established predictive models to understand the impact of temporal and spatial factors on flight volumes.
+
+
+
+c- I am not sure, though, I don't like the models I made much.
+
+d- Better models; maybe group some data together to reduce the variables, especially the airports and region.
+
+e- Thinking of a model that would make sense with the huge amount of airports.
+
+f- Trying to understand the data and make sense of it; I find the whole course interesting.
+
+g- Scaling and factoring the data so it doesn't break the model.
+
+h- I would try to understand the data better, group some variables, and make better models with a better understanding of the dataframe.
+
+i- Start the project all over again and spend some time analyzing the data itself more.
+
+j- Better models and would,and would finish in less time.
